@@ -6,130 +6,286 @@ import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemorySegment;
 import java.lang.foreign.SymbolLookup;
+import java.lang.foreign.ValueLayout;
 import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.nio.file.Path;
 import java.util.Objects;
-
-import static java.lang.foreign.ValueLayout.ADDRESS;
-import static java.lang.foreign.ValueLayout.JAVA_INT;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 public final class WebViewNative {
 
+    private static final int WEBVIEW_ERROR_OK = 0;
+
+    private static final AtomicLong NEXT_CALLBACK_ID =
+            new AtomicLong();
+
+    private static final ConcurrentMap<Long, Runnable> CALLBACKS =
+            new ConcurrentHashMap<>();
+
+    private static final MemorySegment CALLBACK_STUB =
+            createCallbackStub();
+
     private final MethodHandle create;
     private final MethodHandle run;
-    private final MethodHandle setHtml;
     private final MethodHandle destroy;
+    private final MethodHandle setHtml;
     private final MethodHandle setSize;
+    private final MethodHandle dispatch;
 
     public WebViewNative(Path libraryPath) {
-        Objects.requireNonNull(libraryPath, "libraryPath");
-
         Linker linker = Linker.nativeLinker();
 
         SymbolLookup lookup = SymbolLookup.libraryLookup(
-                libraryPath.toAbsolutePath(),
+                libraryPath,
                 Arena.global()
         );
 
         create = linker.downcallHandle(
-                lookup.findOrThrow("webview_create"),
+                lookup.find("webview_create").orElseThrow(),
                 FunctionDescriptor.of(
-                        ADDRESS,
-                        JAVA_INT,
-                        ADDRESS
+                        ValueLayout.ADDRESS,
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS
                 )
         );
 
         run = linker.downcallHandle(
-                lookup.findOrThrow("webview_run"),
-                FunctionDescriptor.ofVoid(ADDRESS)
-        );
-
-        setHtml = linker.downcallHandle(
-                lookup.findOrThrow("webview_set_html"),
-                FunctionDescriptor.ofVoid(
-                        ADDRESS,
-                        ADDRESS
+                lookup.find("webview_run").orElseThrow(),
+                FunctionDescriptor.of(
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS
                 )
         );
 
         destroy = linker.downcallHandle(
-                lookup.findOrThrow("webview_destroy"),
-                FunctionDescriptor.ofVoid(ADDRESS)
+                lookup.find("webview_destroy").orElseThrow(),
+                FunctionDescriptor.of(
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS
+                )
+        );
+
+        setHtml = linker.downcallHandle(
+                lookup.find("webview_set_html").orElseThrow(),
+                FunctionDescriptor.of(
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS,
+                        ValueLayout.ADDRESS
+                )
         );
 
         setSize = linker.downcallHandle(
-                lookup.findOrThrow("webview_set_size"),
-                FunctionDescriptor.ofVoid(
-                        ADDRESS,
-                        JAVA_INT,
-                        JAVA_INT,
-                        JAVA_INT
+                lookup.find("webview_set_size").orElseThrow(),
+                FunctionDescriptor.of(
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS,
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.JAVA_INT
+                )
+        );
+
+        dispatch = linker.downcallHandle(
+                lookup.find("webview_dispatch").orElseThrow(),
+                FunctionDescriptor.of(
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS,
+                        ValueLayout.ADDRESS,
+                        ValueLayout.ADDRESS
                 )
         );
     }
 
+    private static MemorySegment createCallbackStub() {
+        try {
+            MethodHandle callback = MethodHandles.lookup()
+                    .findStatic(
+                            WebViewNative.class,
+                            "dispatchCallback",
+                            MethodType.methodType(
+                                    void.class,
+                                    MemorySegment.class,
+                                    MemorySegment.class
+                            )
+                    );
+
+            return Linker.nativeLinker().upcallStub(
+                    callback,
+                    FunctionDescriptor.ofVoid(
+                            ValueLayout.ADDRESS,
+                            ValueLayout.ADDRESS
+                    ),
+                    Arena.global()
+            );
+
+        } catch (ReflectiveOperationException e) {
+            throw new ExceptionInInitializerError(e);
+        }
+    }
+
+    private static void dispatchCallback(
+            MemorySegment webview,
+            MemorySegment argument
+    ) {
+        try {
+            long id = argument.address();
+
+            Runnable callback = CALLBACKS.remove(id);
+
+            if (callback != null) {
+                callback.run();
+            }
+
+        } catch (Throwable e) {
+            System.err.println("Native callback failed:");
+            e.printStackTrace();
+        }
+    }
+
     public MemorySegment create() {
         try {
-            MemorySegment window = (MemorySegment) create.invokeExact(
+            MemorySegment handle = (MemorySegment) create.invokeExact(
                     0,
                     MemorySegment.NULL
             );
 
-            if (window.equals(MemorySegment.NULL)) {
+            if (handle.address() == 0) {
                 throw new IllegalStateException(
-                        "Native webview_create returned NULL"
+                        "webview_create returned NULL"
                 );
             }
 
-            return window;
+            return handle;
+
         } catch (Throwable e) {
             throw new IllegalStateException(
-                    "Failed to create native WebView", e
+                    "Failed to create WebView",
+                    e
             );
         }
     }
 
-    public void run(MemorySegment window) {
+    public void run(MemorySegment handle) {
         try {
-            run.invokeExact(window);
+            int result = (int) run.invokeExact(handle);
+            checkResult("webview_run", result);
+
         } catch (Throwable e) {
-            throw new IllegalStateException(
-                    "Failed to run native WebView", e
-            );
+            throw nativeFailure("webview_run", e);
         }
     }
 
-    public void setHtml(MemorySegment window, String html) {
-        Objects.requireNonNull(html, "html");
+    public void destroy(MemorySegment handle) {
+        try {
+            int result = (int) destroy.invokeExact(handle);
+            checkResult("webview_destroy", result);
+
+        } catch (Throwable e) {
+            throw nativeFailure("webview_destroy", e);
+        }
+    }
+
+    public void setHtml(MemorySegment handle, String html) {
+        Objects.requireNonNull(html);
 
         try (Arena arena = Arena.ofConfined()) {
             MemorySegment nativeHtml = arena.allocateFrom(html);
-            setHtml.invokeExact(window, nativeHtml);
+
+            int result = (int) setHtml.invokeExact(
+                    handle,
+                    nativeHtml
+            );
+
+            checkResult("webview_set_html", result);
+
         } catch (Throwable e) {
+            throw nativeFailure("webview_set_html", e);
+        }
+    }
+
+    public void setSize(
+            MemorySegment handle,
+            int width,
+            int height
+    ) {
+        try {
+            int result = (int) setSize.invokeExact(
+                    handle,
+                    width,
+                    height,
+                    0
+            );
+
+            checkResult("webview_set_size", result);
+
+        } catch (Throwable e) {
+            throw nativeFailure("webview_set_size", e);
+        }
+    }
+
+    public long registerCallback(Runnable callback) {
+        Objects.requireNonNull(callback);
+
+        long id = NEXT_CALLBACK_ID.incrementAndGet();
+
+        if (id <= 0) {
             throw new IllegalStateException(
-                    "Failed to set WebView HTML", e
+                    "Callback ID overflow"
+            );
+        }
+
+        CALLBACKS.put(id, callback);
+        return id;
+    }
+
+    public void unregisterCallback(long id) {
+        CALLBACKS.remove(id);
+    }
+
+    public void dispatch(MemorySegment handle, long callbackId) {
+        if (callbackId <= 0) {
+            throw new IllegalArgumentException(
+                    "Invalid callback ID"
+            );
+        }
+
+        try {
+            int result = (int) dispatch.invokeExact(
+                    handle,
+                    CALLBACK_STUB,
+                    MemorySegment.ofAddress(callbackId)
+            );
+
+            checkResult("webview_dispatch", result);
+
+        } catch (Throwable e) {
+            throw nativeFailure("webview_dispatch", e);
+        }
+    }
+
+    private static void checkResult(String operation, int result) {
+        if (result != WEBVIEW_ERROR_OK) {
+            throw new IllegalStateException(
+                    operation + " failed with error code: " + result
             );
         }
     }
 
-    public void destroy(MemorySegment window) {
-        try {
-            destroy.invokeExact(window);
-        } catch (Throwable e) {
-            throw new IllegalStateException(
-                    "Failed to destroy native WebView", e
-            );
+    private static IllegalStateException nativeFailure(
+            String operation,
+            Throwable cause
+    ) {
+        if (cause instanceof IllegalStateException exception) {
+            return exception;
         }
-    }
 
-    public void setSize(MemorySegment window, int width, int height) {
-        try {
-            setSize.invokeExact(window, width, height, 0);
-        } catch (Throwable e) {
-            throw new IllegalStateException(
-                    "Failed to set WebView size", e
-            );
-        }
+        return new IllegalStateException(
+                operation + " failed",
+                cause
+        );
     }
 }
