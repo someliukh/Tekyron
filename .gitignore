@@ -1,0 +1,30 @@
+# Maven
+target/
+*.class
+
+# CMake / Native builds
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+
+# Native binaries
+*.dylib
+*.dll
+*.so
+*.so.*
+*.o
+*.obj
+
+# IntelliJ IDEA
+.idea/
+*.iml
+out/
+
+# macOS
+.DS_Store
+.AppleDouble
+
+# Logs
+*.log

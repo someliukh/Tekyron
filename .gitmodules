@@ -1,0 +1,3 @@
+[submodule "tekyron-webview-macos/native/webview"]
+	path = tekyron-webview-macos/native/webview
+	url = https://github.com/webview/webview.git
