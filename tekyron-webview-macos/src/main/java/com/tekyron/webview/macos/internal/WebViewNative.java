@@ -34,6 +34,7 @@ public final class WebViewNative {
     private final MethodHandle destroy;
     private final MethodHandle setHtml;
     private final MethodHandle setSize;
+    private final MethodHandle navigate;
     private final MethodHandle dispatch;
 
     public WebViewNative(Path libraryPath) {
@@ -86,6 +87,15 @@ public final class WebViewNative {
                         ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_INT,
                         ValueLayout.JAVA_INT
+                )
+        );
+
+        navigate = linker.downcallHandle(
+                lookup.find("webview_navigate").orElseThrow(),
+                FunctionDescriptor.of(
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS,
+                        ValueLayout.ADDRESS
                 )
         );
 
@@ -224,6 +234,24 @@ public final class WebViewNative {
 
         } catch (Throwable e) {
             throw nativeFailure("webview_set_size", e);
+        }
+    }
+
+    public void navigate(MemorySegment handle, String url) {
+        Objects.requireNonNull(url);
+
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment nativeUrl = arena.allocateFrom(url);
+
+            int result = (int) navigate.invokeExact(
+                    handle,
+                    nativeUrl
+            );
+
+            checkResult("webview_navigate", result);
+
+        } catch (Throwable e) {
+            throw nativeFailure("webview_navigate", e);
         }
     }
 

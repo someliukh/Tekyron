@@ -46,8 +46,9 @@ public final class MacOSWebView implements WebView {
         ensureOwnerThread();
         ensureOpen();
 
-        throw new UnsupportedOperationException(
-                "Navigation is not implemented yet"
+        nativeApi.navigate(
+                handle,
+                Objects.requireNonNull(url)
         );
     }
 
