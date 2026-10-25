@@ -1,8 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
     <modelVersion>4.0.0</modelVersion>
+
     <parent>
         <groupId>com.tekyron</groupId>
         <artifactId>tekyron-parent</artifactId>
@@ -11,18 +14,103 @@
 
     <artifactId>tekyron-webview-macos</artifactId>
 
-    <properties>
-        <maven.compiler.source>26</maven.compiler.source>
-        <maven.compiler.target>26</maven.compiler.target>
-        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-    </properties>
     <dependencies>
         <dependency>
             <groupId>com.tekyron</groupId>
             <artifactId>tekyron-webview-api</artifactId>
             <version>${project.version}</version>
-            <scope>compile</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.tekyron</groupId>
+            <artifactId>tekyron-core</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
         </dependency>
     </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+
+                <executions>
+                    <execution>
+                        <id>build-macos-native-library</id>
+                        <phase>generate-resources</phase>
+
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+
+                        <configuration>
+                            <target>
+                                <mkdir dir="${project.build.directory}/native-build"/>
+
+                                <exec executable="cmake"
+                                      failonerror="true"
+                                      dir="${project.basedir}">
+                                    <arg value="-S"/>
+                                    <arg value="${project.basedir}/native/webview"/>
+                                    <arg value="-B"/>
+                                    <arg value="${project.build.directory}/native-build"/>
+                                    <arg value="-G"/>
+                                    <arg value="Ninja"/>
+                                    <arg value="-DCMAKE_BUILD_TYPE=Debug"/>
+                                    <arg value="-DWEBVIEW_BUILD=ON"/>
+                                    <arg value="-DWEBVIEW_BUILD_SHARED_LIBRARY=ON"/>
+                                    <arg value="-DWEBVIEW_BUILD_STATIC_LIBRARY=OFF"/>
+                                    <arg value="-DWEBVIEW_BUILD_EXAMPLES=OFF"/>
+                                    <arg value="-DWEBVIEW_BUILD_TESTS=OFF"/>
+                                    <arg value="-DWEBVIEW_BUILD_DOCS=OFF"/>
+                                </exec>
+
+                                <exec executable="cmake"
+                                      failonerror="true"
+                                      dir="${project.basedir}">
+                                    <arg value="--build"/>
+                                    <arg value="${project.build.directory}/native-build"/>
+                                    <arg value="--target"/>
+                                    <arg value="webview_core_shared"/>
+                                </exec>
+                            </target>
+                        </configuration>
+                    </execution>
+
+                    <execution>
+                        <id>package-macos-native-library</id>
+                        <phase>process-resources</phase>
+
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+
+                        <configuration>
+                            <target>
+                                <available
+                                        file="${project.build.directory}/native-build/core/libwebviewd.dylib"
+                                        property="native.library.exists"/>
+
+                                <fail
+                                        unless="native.library.exists"
+                                        message="Native library not found after CMake build."/>
+
+                                <mkdir
+                                        dir="${project.build.outputDirectory}/native/macos/aarch64"/>
+
+                                <exec executable="cp" failonerror="true">
+                                    <arg value="-L"/>
+                                    <arg value="${project.build.directory}/native-build/core/libwebviewd.dylib"/>
+                                    <arg value="${project.build.outputDirectory}/native/macos/aarch64/libwebviewd.dylib"/>
+                                </exec>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
 
 </project>

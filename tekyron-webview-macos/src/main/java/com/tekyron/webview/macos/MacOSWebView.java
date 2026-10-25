@@ -66,6 +66,7 @@ public final class MacOSWebView implements WebView {
         dispatcher.dispatch(task);
     }
 
+    @Override
     public void run() {
         ensureOwnerThread();
 
